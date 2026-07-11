@@ -1,0 +1,20 @@
+[
+  {
+    "id": "U001",
+    "name": "Alex Rivera",
+    "role": "user",
+    "context": "Example user — replace with personas that fit your domain"
+  },
+  {
+    "id": "U002",
+    "name": "Jordan Kim",
+    "role": "user",
+    "context": "Example user — replace with personas that fit your domain"
+  },
+  {
+    "id": "U003",
+    "name": "Sam Patel",
+    "role": "admin",
+    "context": "Example admin user — useful if your agent has role-based behavior"
+  }
+]
