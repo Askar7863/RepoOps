@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AgentBot</title>
+  <title>RepoOps</title>
   <style>
     :root {
       --bg: #fbf7f3;
@@ -108,33 +108,6 @@
       font-weight: 500;
     }
 
-    .persona {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      background: var(--surface);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 0.35rem 0.4rem 0.35rem 0.85rem;
-      font-size: 0.85rem;
-      color: var(--text-muted);
-      box-shadow: var(--shadow-sm);
-    }
-    .persona select {
-      border: none;
-      background: white;
-      border-radius: 999px;
-      padding: 0.35rem 0.75rem;
-      font: inherit;
-      color: var(--text);
-      font-weight: 600;
-      outline: none;
-      cursor: pointer;
-      box-shadow: var(--shadow-sm);
-    }
-
     .card {
       background: var(--surface);
       backdrop-filter: blur(16px);
@@ -147,10 +120,67 @@
       flex-direction: column;
     }
 
+    .repository-card {
+      background: var(--surface);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+      padding: 1.25rem;
+    }
+    .repository-card h2 {
+      margin: 0 0 1rem;
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .repository-card label {
+      display: block;
+      margin-bottom: 0.45rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .repository-controls { display: flex; gap: 0.5rem; }
+    #repo-url {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      outline: none;
+      font: inherit;
+      font-size: 0.95rem;
+      padding: 0.65rem 1rem;
+      background: white;
+      color: var(--text);
+      transition: border-color 140ms, box-shadow 140ms;
+    }
+    #repo-url:focus {
+      border-color: rgba(124, 92, 255, 0.5);
+      box-shadow: 0 0 0 4px rgba(124, 92, 255, 0.12);
+    }
+    #repo-url::placeholder { color: var(--text-muted); }
+    #load-repo-btn {
+      width: auto;
+      height: auto;
+      border-radius: 999px;
+      padding: 0.65rem 1rem;
+      font: inherit;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    #repo-status {
+      display: block;
+      margin-top: 0.75rem;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+
     #log {
       padding: 1.25rem;
-      height: 60vh;
-      min-height: 420px;
+      height: min(60vh, 420px);
+      min-height: 0;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
@@ -200,6 +230,7 @@
       color: white;
     }
     .avatar.bot { background: var(--accent-grad); }
+    .avatar.user { background: linear-gradient(135deg, #7c8cff 0%, #7c5cff 100%); }
 
     .bubble {
       max-width: 78%;
@@ -267,6 +298,9 @@
     }
 
     .composer {
+      display: block;
+      flex: 0 0 auto;
+      min-height: 64px;
       border-top: 1px solid var(--border);
       background: rgba(255, 255, 255, 0.6);
       padding: 0.75rem;
@@ -323,12 +357,250 @@
       letter-spacing: 0.02em;
     }
 
+    .repository-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+    }
+    .repository-footer #repo-status { margin-top: 0; }
+
+    .ghost-btn {
+      width: auto;
+      height: auto;
+      border-radius: 999px;
+      padding: 0.5rem 0.9rem;
+      font: inherit;
+      font-size: 0.82rem;
+      font-weight: 600;
+      white-space: nowrap;
+      background: white;
+      color: var(--accent);
+      border: 1px solid rgba(124, 92, 255, 0.35);
+      box-shadow: none;
+    }
+    .ghost-btn:hover:not(:disabled) {
+      background: rgba(124, 92, 255, 0.08);
+      transform: none;
+      box-shadow: none;
+    }
+    .ghost-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* --- Health check modal --- */
+
+    .health-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(20, 20, 40, 0.45);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      z-index: 100;
+      animation: fadeIn 160ms ease;
+    }
+    /* The [hidden] attribute's UA-stylesheet display:none is overridden by
+       the display:flex rule above (both target this same element) --
+       without this, the overlay stays visible and intercepts clicks on
+       everything behind it even while "hidden". */
+    .health-overlay[hidden] { display: none; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    .health-modal {
+      width: 100%;
+      max-width: 640px;
+      max-height: min(85vh, 780px);
+      background: var(--surface-solid);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+      border: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: pop 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+
+    .health-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      flex: 0 0 auto;
+    }
+    .health-modal-header h2 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .health-modal-actions { display: flex; gap: 0.4rem; }
+
+    .icon-btn {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      box-shadow: none;
+    }
+    .icon-btn:hover { background: rgba(20, 20, 40, 0.05); color: var(--text); transform: none; }
+    .icon-btn svg { width: 15px; height: 15px; }
+    .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .health-modal-body {
+      padding: 1.25rem;
+      overflow-y: auto;
+      flex: 1 1 auto;
+    }
+
+    .health-modal-footer {
+      padding: 0.6rem 1.25rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      flex: 0 0 auto;
+    }
+
+    .health-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 2.5rem 0;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+    }
+
+    .health-error { color: #d03b3b; font-size: 0.9rem; }
+
+    .health-hero {
+      text-align: center;
+      padding: 0.5rem 0 1.25rem;
+    }
+    .health-hero-value {
+      font-size: 3rem;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: -0.02em;
+    }
+    .health-hero-label {
+      margin-top: 0.35rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .health-tiles {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 0.6rem;
+      margin-bottom: 1.25rem;
+    }
+    .health-tile {
+      background: rgba(20, 20, 40, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 0.7rem 0.8rem;
+    }
+    .health-tile-label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.3rem;
+    }
+    .health-tile-value {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .health-section-title {
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin: 1.1rem 0 0.6rem;
+    }
+
+    .health-meters { display: flex; flex-direction: column; gap: 0.55rem; }
+    .health-meter-row {
+      display: grid;
+      grid-template-columns: 90px 1fr 34px;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .health-meter-label { font-size: 0.8rem; color: var(--text-muted); }
+    .health-meter-track {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(20, 20, 40, 0.08);
+      overflow: hidden;
+    }
+    .health-meter-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 300ms ease;
+    }
+    .health-meter-value {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .health-sparkline {
+      display: flex;
+      align-items: flex-end;
+      gap: 4px;
+      height: 60px;
+      padding: 0 0.2rem;
+    }
+    .health-spark-bar {
+      flex: 1;
+      min-width: 6px;
+      max-width: 20px;
+      background: var(--accent);
+      border-radius: 4px 4px 0 0;
+    }
+    .health-empty-note { color: var(--text-muted); font-size: 0.85rem; }
+
+    .health-narrative {
+      margin-top: 1.25rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+    }
+    .health-narrative h4 {
+      font-size: 0.88rem;
+      font-weight: 700;
+      margin: 1rem 0 0.4rem;
+    }
+    .health-narrative h4:first-child { margin-top: 0; }
+    .health-narrative p {
+      margin: 0 0 0.6rem;
+      font-size: 0.88rem;
+      line-height: 1.55;
+      color: var(--text);
+    }
+    .health-narrative ul { margin: 0 0 0.6rem; padding-left: 1.2rem; }
+    .health-narrative li { font-size: 0.88rem; line-height: 1.55; margin-bottom: 0.25rem; }
+
     @media (max-width: 560px) {
       body { padding: 1rem 0.75rem; }
       header { flex-direction: column; align-items: stretch; gap: 0.75rem; }
-      .persona { align-self: flex-start; }
-      #log { height: 62vh; }
+      .repository-controls { flex-direction: column; }
+      #load-repo-btn { width: 100%; }
+      #log { height: min(62vh, 420px); }
       .bubble { max-width: 85%; font-size: 0.92rem; }
+      .health-modal { max-height: 92vh; }
+      .health-meter-row { grid-template-columns: 72px 1fr 30px; }
     }
   </style>
 </head>
@@ -338,27 +610,38 @@
       <div class="brand">
         <div class="mark">T</div>
         <div>
-          <h1>AgentBot</h1>
-          <span class="tag">Your time off, sorted.</span>
+          <h1>RepoOps</h1>
+          <span class="tag">AI-Powered Repository Operations</span>
         </div>
       </div>
-      <div class="persona">
-        <span>Acting as</span>
-        <select id="user" aria-label="Acting as user"></select>
-      </div>
     </header>
+
+    <section class="repository-card" aria-labelledby="repository-heading">
+      <h2 id="repository-heading">Repository</h2>
+      <label for="repo-url">GitHub Repository URL</label>
+      <div class="repository-controls">
+        <input id="repo-url" type="url" placeholder="https://github.com/owner/repository" autocomplete="url" />
+        <button id="load-repo-btn" type="button">Load Repository</button>
+      </div>
+      <div class="repository-footer">
+        <span id="repo-status">⚪ No Repository Loaded</span>
+        <button id="health-btn" type="button" class="ghost-btn" disabled>Health Check</button>
+      </div>
+    </section>
 
     <div class="card">
       <div id="log" role="log" aria-live="polite">
         <div class="empty">
-          <strong>Hey there.</strong>
-          The chat works — say hi. Policy answers, balances, and time-off
-          requests come online as you build them (see coursework.md).
+          <strong>Welcome to RepoOps</strong>
+          Paste a GitHub repository URL above and click<br>
+          Load Repository to index the repository.<br><br>
+          Once indexing is complete, ask anything about<br>
+          the codebase.
         </div>
       </div>
       <div class="composer">
         <form id="form">
-          <input id="input" placeholder="Say something to AgentBot…" autocomplete="off" />
+          <input id="input" placeholder="Ask anything about the repository..." autocomplete="off" />
           <button type="submit" aria-label="Send">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
               <path d="M5 12h14"/>
@@ -371,22 +654,77 @@
     <div class="hint">Press Enter to send</div>
   </div>
 
+  <div id="health-overlay" class="health-overlay" hidden>
+    <div class="health-modal" role="dialog" aria-modal="true" aria-labelledby="health-modal-title">
+      <div class="health-modal-header">
+        <h2 id="health-modal-title">Repository Health Check</h2>
+        <div class="health-modal-actions">
+          <button id="health-refresh-btn" type="button" class="icon-btn" aria-label="Refresh" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <path d="M21 3v6h-6" />
+            </svg>
+          </button>
+          <button id="health-close-btn" type="button" class="icon-btn" aria-label="Close" title="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6 6 18" />
+              <path d="M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div id="health-modal-body" class="health-modal-body"></div>
+      <div class="health-modal-footer">
+        <span id="health-last-checked"></span>
+      </div>
+    </div>
+  </div>
+
   <script>
     const log = document.getElementById("log");
     const input = document.getElementById("input");
-    const userSel = document.getElementById("user");
     const form = document.getElementById("form");
     const sendBtn = form.querySelector("button");
+    const repoInput = document.getElementById("repo-url");
+    const loadRepoBtn = document.getElementById("load-repo-btn");
+    const repoStatus = document.getElementById("repo-status");
+    const apiBaseUrl = window.location.protocol === "file:" ? "http://127.0.0.1:8000" : "";
 
-    function initials(name) {
-      return name.split(/\s+/).map(p => p[0]).join("").slice(0, 2).toUpperCase();
-    }
+    const healthBtn = document.getElementById("health-btn");
+    const healthOverlay = document.getElementById("health-overlay");
+    const healthBody = document.getElementById("health-modal-body");
+    const healthRefreshBtn = document.getElementById("health-refresh-btn");
+    const healthCloseBtn = document.getElementById("health-close-btn");
+    const healthLastChecked = document.getElementById("health-last-checked");
 
-    function userAvatarStyle() {
-      const v = userSel.value || "u";
-      const hue = (Array.from(v).reduce((a, c) => a + c.charCodeAt(0), 0) * 37) % 360;
-      return `background: linear-gradient(135deg, hsl(${hue} 75% 62%), hsl(${(hue + 40) % 360} 70% 55%));`;
-    }
+    loadRepoBtn.addEventListener("click", async () => {
+      const repoUrl = repoInput.value.trim();
+      if (!repoUrl) {
+        repoStatus.textContent = "⚪ Enter a GitHub repository URL";
+        repoInput.focus();
+        return;
+      }
+
+      loadRepoBtn.disabled = true;
+      repoStatus.textContent = "⚪ Loading repository...";
+
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/repositories/load`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo_url: repoUrl }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Unable to load repository.");
+
+        repoStatus.textContent = "🟢 Repository Loaded";
+        healthBtn.disabled = false;
+      } catch (error) {
+        repoStatus.textContent = `⚪ ${error.message}`;
+      } finally {
+        loadRepoBtn.disabled = false;
+      }
+    });
 
     function clearEmpty() {
       const e = log.querySelector(".empty");
@@ -400,13 +738,7 @@
 
       const avatar = document.createElement("div");
       avatar.className = "avatar " + role;
-      if (role === "bot") {
-        avatar.textContent = "T";
-      } else {
-        const opt = userSel.selectedOptions[0];
-        avatar.textContent = opt ? initials(opt.textContent.split(" (")[0]) : "U";
-        avatar.style.cssText = userAvatarStyle();
-      }
+      avatar.textContent = role === "bot" ? "T" : "U";
 
       const bubble = document.createElement("div");
       bubble.className = "bubble " + role;
@@ -446,17 +778,6 @@
       return row;
     }
 
-    async function loadUsers() {
-      const r = await fetch("/api/users");
-      const users = await r.json();
-      for (const u of users) {
-        const opt = document.createElement("option");
-        opt.value = u.id;
-        opt.textContent = `${u.full_name} (${u.location_code})`;
-        userSel.appendChild(opt);
-      }
-    }
-
     async function send(msg) {
       add("user", msg);
       sendBtn.disabled = true;
@@ -464,7 +785,7 @@
       try {
         const r = await fetch("/api/chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "X-User-Id": userSel.value },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: msg }),
         });
         if (!r.ok) throw new Error(await r.text());
@@ -488,7 +809,175 @@
       send(v);
     });
 
-    loadUsers();
+    // --- Health check modal ---
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function inlineFormat(text) {
+      return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    }
+
+    // Lightweight markdown-lite renderer for the narrative's headers (##),
+    // bullet lists (-), and **bold** -- avoids pulling in a full markdown
+    // library for what the LLM reliably produces: numbered section headers
+    // plus plain paragraphs and the occasional bullet list.
+    function markdownLite(text) {
+      const lines = (text || "").split("\n");
+      let html = "";
+      let inList = false;
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) {
+          if (inList) { html += "</ul>"; inList = false; }
+          continue;
+        }
+        const header = line.match(/^#{1,3}\s*(.+)$/);
+        if (header) {
+          if (inList) { html += "</ul>"; inList = false; }
+          html += `<h4>${inlineFormat(header[1].replace(/^\d+\.\s*/, ""))}</h4>`;
+          continue;
+        }
+        const bullet = line.match(/^[-*]\s+(.+)$/);
+        if (bullet) {
+          if (!inList) { html += "<ul>"; inList = true; }
+          html += `<li>${inlineFormat(bullet[1])}</li>`;
+          continue;
+        }
+        if (inList) { html += "</ul>"; inList = false; }
+        html += `<p>${inlineFormat(line)}</p>`;
+      }
+      if (inList) html += "</ul>";
+      return html;
+    }
+
+    function scoreColor(score) {
+      if (score === null || score === undefined) return "var(--text-muted)";
+      if (score >= 80) return "#0ca30c";
+      if (score >= 60) return "#fab219";
+      if (score >= 40) return "#ec835a";
+      return "#d03b3b";
+    }
+
+    function formatSize(mb) {
+      return mb >= 1024 ? (mb / 1024).toFixed(2) + " GB" : mb.toFixed(2) + " MB";
+    }
+
+    function healthTile(label, value) {
+      return `<div class="health-tile"><div class="health-tile-label">${label}</div><div class="health-tile-value">${value}</div></div>`;
+    }
+
+    function healthMeter(label, score) {
+      const width = score === null || score === undefined ? 0 : score;
+      const color = scoreColor(score);
+      const display = score === null || score === undefined ? "N/A" : Math.round(score);
+      return `
+        <div class="health-meter-row">
+          <span class="health-meter-label">${label}</span>
+          <div class="health-meter-track"><div class="health-meter-fill" style="width:${width}%;background:${color}"></div></div>
+          <span class="health-meter-value" style="color:${color}">${display}</span>
+        </div>`;
+    }
+
+    function healthSparkline(weekly) {
+      if (!weekly || !weekly.length) return "";
+      const max = Math.max(1, ...weekly.map(w => w[1]));
+      const bars = weekly.map(([week, count]) => {
+        const h = Math.max(Math.round((count / max) * 100), count > 0 ? 6 : 2);
+        const label = `${week}: ${count} commit${count === 1 ? "" : "s"}`;
+        return `<div class="health-spark-bar" style="height:${h}%" title="${label}"></div>`;
+      }).join("");
+      return `<div class="health-sparkline">${bars}</div>`;
+    }
+
+    function renderHealth(data) {
+      const scoreVal = data.health_score;
+      const color = scoreColor(scoreVal);
+
+      const codeHealth = data.code_health && data.code_health.available ? data.code_health : null;
+      const gitInfo = data.git_info && data.git_info.available ? data.git_info : null;
+      const depInfo = data.dependency_info && data.dependency_info.available ? data.dependency_info : null;
+      const complexityInfo = data.complexity_info && data.complexity_info.available ? data.complexity_info : null;
+
+      const languageCount = codeHealth ? codeHealth.language_counts.length : 0;
+      const topLanguage = codeHealth && codeHealth.language_counts[0] ? codeHealth.language_counts[0][0] : "—";
+
+      const tiles = [
+        healthTile("Commits", gitInfo ? gitInfo.total_commits.toLocaleString() : "—"),
+        healthTile("Contributors", gitInfo ? gitInfo.contributor_count : "—"),
+        healthTile("Languages", `${languageCount} (${topLanguage})`),
+        healthTile("Repository Size", formatSize(data.size_info.total_size_mb)),
+        healthTile("Dependencies", depInfo ? `${depInfo.total_runtime_dependencies} runtime / ${depInfo.total_dev_dependencies} dev` : "None found"),
+        healthTile("Avg Complexity", complexityInfo ? complexityInfo.avg_complexity : "—"),
+      ].join("");
+
+      const meters = [
+        healthMeter("Docs", data.sub_scores.documentation),
+        healthMeter("Testing", data.sub_scores.testing),
+        healthMeter("Security", data.sub_scores.security),
+        healthMeter("Complexity", data.sub_scores.complexity),
+        healthMeter("Activity", data.sub_scores.activity),
+        healthMeter("Bus Factor", data.sub_scores.bus_factor),
+      ].join("");
+
+      const sparkline = healthSparkline(gitInfo ? gitInfo.weekly_activity : []);
+
+      healthBody.innerHTML = `
+        <div class="health-hero">
+          <div class="health-hero-value" style="color:${color}">${scoreVal !== null && scoreVal !== undefined ? scoreVal : "N/A"}</div>
+          <div class="health-hero-label">Health Score</div>
+        </div>
+        <div class="health-tiles">${tiles}</div>
+        <div class="health-section-title">Scores</div>
+        <div class="health-meters">${meters}</div>
+        <div class="health-section-title">Recent Activity (last 12 weeks)</div>
+        ${sparkline || '<p class="health-empty-note">No commit history available.</p>'}
+        <div class="health-narrative">${markdownLite(data.narrative)}</div>
+      `;
+
+      const now = new Date();
+      healthLastChecked.textContent = `Last checked: ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    }
+
+    async function fetchHealth() {
+      healthBody.innerHTML = `
+        <div class="health-loading">
+          <div class="typing"><span></span><span></span><span></span></div>
+          <p>Analyzing repository...</p>
+        </div>`;
+      healthRefreshBtn.disabled = true;
+
+      try {
+        const r = await fetch(`${apiBaseUrl}/api/repositories/health`, { method: "POST" });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || "Could not run the health check.");
+        renderHealth(data);
+      } catch (e) {
+        healthBody.innerHTML = `<p class="health-error">Error: ${e.message}</p>`;
+      } finally {
+        healthRefreshBtn.disabled = false;
+      }
+    }
+
+    function openHealthModal() {
+      healthOverlay.hidden = false;
+      fetchHealth();
+    }
+
+    function closeHealthModal() {
+      healthOverlay.hidden = true;
+    }
+
+    healthBtn.addEventListener("click", openHealthModal);
+    healthRefreshBtn.addEventListener("click", fetchHealth);
+    healthCloseBtn.addEventListener("click", closeHealthModal);
+    healthOverlay.addEventListener("click", e => {
+      if (e.target === healthOverlay) closeHealthModal();
+    });
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape" && !healthOverlay.hidden) closeHealthModal();
+    });
   </script>
 </body>
 </html>

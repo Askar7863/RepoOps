@@ -1,8 +1,12 @@
 .env
 __pycache__/
 *.pyc
+venv/
 .venv/
 *.egg-info/
 .chroma/
 chroma_db/
+bm25_db/
 *.db
+repos/
+.active_repository
