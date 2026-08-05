@@ -3,8 +3,22 @@ uvicorn[standard]
 pydantic
 python-dotenv
 openai
+chromadb
+sentence-transformers
 
-# Add more as you build — at minimum you'll likely need:
-# langgraph          — agent orchestration
-# chromadb           — local vector store for RAG
-# tiktoken           — token counting (useful for chunking)
+# Agent orchestration (app/agent/graph.py)
+langgraph
+
+# Chunking (app/github/chunker.py)
+tree-sitter
+tree-sitter-language-pack
+
+# LLM context-budget token counting (app/agent/tools/repo_summarizer.py)
+tiktoken
+
+# Sparse retrieval (app/rag/sparse_store.py)
+rank-bm25
+
+# TOML manifest parsing for repo_health_tool's dependency check (Python
+# 3.11+ has tomllib in stdlib; this backport covers 3.10)
+tomli; python_version < "3.11"
