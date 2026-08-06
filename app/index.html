@@ -108,6 +108,46 @@
       font-weight: 500;
     }
 
+    /* --- Persona switcher (top right) --- */
+    .persona-switcher {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      background: rgba(20, 20, 40, 0.04);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px;
+      flex: 0 0 auto;
+    }
+    .persona-btn {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 0.35rem 0.65rem;
+      border-radius: 999px;
+      cursor: pointer;
+      white-space: nowrap;
+      width: auto;
+      height: auto;
+      box-shadow: none;
+      transition: background 140ms, color 140ms, transform 120ms;
+    }
+    .persona-btn:hover:not(.active) {
+      background: rgba(20, 20, 40, 0.07);
+      color: var(--text);
+      transform: none;
+      box-shadow: none;
+    }
+    .persona-btn.active {
+      background: var(--accent-grad);
+      color: white;
+      box-shadow: 0 4px 12px -4px rgba(124, 92, 255, 0.5);
+    }
+    .persona-btn.active:hover { transform: none; }
+
     .card {
       background: var(--surface);
       backdrop-filter: blur(16px);
@@ -595,6 +635,7 @@
     @media (max-width: 560px) {
       body { padding: 1rem 0.75rem; }
       header { flex-direction: column; align-items: stretch; gap: 0.75rem; }
+      .persona-switcher { align-self: center; justify-content: center; }
       .repository-controls { flex-direction: column; }
       #load-repo-btn { width: 100%; }
       #log { height: min(62vh, 420px); }
@@ -613,6 +654,11 @@
           <h1>RepoOps</h1>
           <span class="tag">AI-Powered Repository Operations</span>
         </div>
+      </div>
+      <div class="persona-switcher" role="radiogroup" aria-label="Response style">
+        <button type="button" class="persona-btn" data-persona="student" role="radio" aria-checked="false" title="Simpler, conceptual explanations for someone learning the codebase">Student</button>
+        <button type="button" class="persona-btn active" data-persona="developer" role="radio" aria-checked="true" title="Technical, direct answers for someone actively working in the code">Developer</button>
+        <button type="button" class="persona-btn" data-persona="architect" role="radio" aria-checked="false" title="Structural, trade-off and risk framing for assessing the system as a whole">Architect</button>
       </div>
     </header>
 
@@ -696,6 +742,30 @@
     const healthRefreshBtn = document.getElementById("health-refresh-btn");
     const healthCloseBtn = document.getElementById("health-close-btn");
     const healthLastChecked = document.getElementById("health-last-checked");
+
+    // --- Persona switcher ---
+    // Only changes how answers are EXPLAINED (narration lens) -- never
+    // which facts/numbers/code come back. Persisted in localStorage so a
+    // reload keeps the last choice instead of silently resetting it.
+    const PERSONAS = ["student", "developer", "architect"];
+    const personaBtns = Array.from(document.querySelectorAll(".persona-btn"));
+    let currentPersona = localStorage.getItem("repoops-persona");
+    if (!PERSONAS.includes(currentPersona)) currentPersona = "developer";
+
+    function setPersona(persona) {
+      currentPersona = persona;
+      localStorage.setItem("repoops-persona", persona);
+      for (const btn of personaBtns) {
+        const active = btn.dataset.persona === persona;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-checked", active ? "true" : "false");
+      }
+    }
+
+    for (const btn of personaBtns) {
+      btn.addEventListener("click", () => setPersona(btn.dataset.persona));
+    }
+    setPersona(currentPersona);
 
     loadRepoBtn.addEventListener("click", async () => {
       const repoUrl = repoInput.value.trim();
@@ -786,7 +856,7 @@
         const r = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: msg }),
+          body: JSON.stringify({ message: msg, persona: currentPersona }),
         });
         if (!r.ok) throw new Error(await r.text());
         const data = await r.json();
@@ -949,7 +1019,11 @@
       healthRefreshBtn.disabled = true;
 
       try {
-        const r = await fetch(`${apiBaseUrl}/api/repositories/health`, { method: "POST" });
+        const r = await fetch(`${apiBaseUrl}/api/repositories/health`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ persona: currentPersona }),
+        });
         const data = await r.json();
         if (!r.ok) throw new Error(data.detail || "Could not run the health check.");
         renderHealth(data);

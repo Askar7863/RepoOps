@@ -25,6 +25,8 @@ class AgentState(TypedDict, total=False):
     message: str
     active_repository: str
     local_path: Path | None
+    persona: str | None  # "student" | "developer" | "architect" -- narration lens only, never affects computed facts
+    conversation_context: str | None  # recent turns + rolling summary from memory.py -- narration grounding only, never affects computed facts
 
     # ---- classifier/router output ----
     chosen_tool: str | None

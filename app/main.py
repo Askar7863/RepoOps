@@ -65,6 +65,7 @@ from .github.chunker import chunk_repository
 from .rag.indexer import index_repository
 from .rag.chroma_store import delete_collection
 from .rag.sparse_store import delete_sparse_index
+from .agent import memory
 from .agent.pipeline import run_agent
 from .agent.tools.repo_health import compute_health, narrate_health
 
@@ -88,8 +89,25 @@ app.add_middleware(
 )
 
 
+_VALID_PERSONAS = {"student", "developer", "architect"}
+_DEFAULT_PERSONA = "developer"
+
+
+def _resolve_persona(persona: str | None) -> str:
+    """Falls back to the default (today's unchanged behavior) for a
+    missing or unrecognized value, rather than erroring -- an old/other
+    client that never sends a persona must keep working exactly as before."""
+
+    return persona if persona in _VALID_PERSONAS else _DEFAULT_PERSONA
+
+
 class ChatRequest(BaseModel):
     message: str
+    persona: str | None = None
+
+
+class HealthRequest(BaseModel):
+    persona: str | None = None
 
 
 class RepositoryRequest(BaseModel):
@@ -105,12 +123,16 @@ def chat(req: ChatRequest):
     state = {
         "message": req.message,
         "active_repository": get_active_repository() or "",
+        "persona": _resolve_persona(req.persona),
+        "conversation_context": memory.build_context(),
         "sources": [],
         "tool_used": "general_chat",
         "error": None,
     }
 
     state = run_agent(state)
+
+    memory.add_turn(req.message, state["reply"], state.get("tool_used"))
 
     return {
         "reply": state["reply"],
@@ -122,7 +144,7 @@ def chat(req: ChatRequest):
 
 
 @app.post("/api/repositories/health")
-def repository_health():
+def repository_health(req: HealthRequest = HealthRequest()):
     """
     Direct health-check endpoint for the UI's Health Check button --
     deliberately bypasses run_agent/classify_intent entirely. A button
@@ -148,7 +170,7 @@ def repository_health():
     health = compute_health(active, local_path)
 
     try:
-        narrative = narrate_health(health["report_text"])
+        narrative = narrate_health(health["report_text"], persona=_resolve_persona(req.persona))
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -263,6 +285,11 @@ def load_repository(req: RepositoryRequest):
         log_count("Sparse Indexed", index_result["sparse_indexed"])
 
         set_active_repository(local_path.name)
+
+        # A new repository is now active -- any conversation memory from
+        # before this point was grounded in a different (or no) repo, and
+        # would otherwise leak into follow-up answers about this one.
+        memory.reset()
 
         ###################################################
         # STEP 6 - DROP THE PREVIOUS REPOSITORY'S INDEX

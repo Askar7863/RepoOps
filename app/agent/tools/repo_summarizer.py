@@ -353,7 +353,12 @@ def act_repo_summarizer(state: dict) -> dict:
     state["context_used"] = user_content
 
     try:
-        reply = call_llm(system_prompt, user_content)
+        reply = call_llm(
+            system_prompt,
+            user_content,
+            persona=state.get("persona"),
+            conversation_context=state.get("conversation_context"),
+        )
     except Exception as exc:
         return llm_error(state, TOOL_NAME, exc)
 

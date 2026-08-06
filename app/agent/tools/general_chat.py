@@ -28,7 +28,12 @@ def act_general_chat(state: dict) -> dict:
     system = "You are RepoOps, an assistant for exploring and modifying a loaded GitHub repository."
 
     try:
-        reply = call_llm(system, state["message"])
+        reply = call_llm(
+            system,
+            state["message"],
+            persona=state.get("persona"),
+            conversation_context=state.get("conversation_context"),
+        )
     except Exception as exc:
         return llm_error(state, tool_name, exc)
 

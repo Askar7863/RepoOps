@@ -48,12 +48,11 @@ This module DOES NOT:
 
 import json
 import re
-import subprocess
 from collections import Counter
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from ...github.git_history import basic_history
 from ...rag.sparse_store import get_all_chunks
 from ._shared import call_llm, no_repo, llm_error
 
@@ -93,120 +92,18 @@ def _is_test_or_example_path(path: str) -> bool:
     return _is_test_path(path) or _is_example_path(path)
 
 
-def _run_git(local_path: Path, args: list) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git"] + args,
-            cwd=str(local_path),
-            capture_output=True,
-            # Explicit UTF-8 rather than text=True's locale default: commit
-            # author names/messages routinely contain non-ASCII bytes that
-            # aren't valid under Windows' cp1252 default, which crashes the
-            # decode entirely. errors="replace" so one odd byte in one commit
-            # message can't take down the whole history read.
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-    if result.returncode != 0:
-        return None
-
-    return result.stdout
-
-
-def _weekly_activity(commits: list, weeks: int = 12) -> list:
-    """
-    [(week_start_iso_date, commit_count), ...] oldest to newest, for a
-    simple recent-activity histogram -- bucketed from the commit dates
-    _git_history already parsed, no extra git calls. Buckets by each
-    commit's own recorded timezone rather than normalizing to UTC; for
-    a week-granularity overview the odd commit landing in an adjacent
-    bucket near a week boundary doesn't matter.
-    """
-
-    if not commits:
-        return []
-
-    buckets = Counter()
-    for c in commits:
-        try:
-            dt = datetime.fromisoformat(c["date"])
-        except ValueError:
-            continue
-        monday = (dt - timedelta(days=dt.weekday())).date()
-        buckets[monday] += 1
-
-    if not buckets:
-        return []
-
-    latest_monday = max(buckets)
-    return [
-        ((latest_monday - timedelta(weeks=i)).isoformat(), buckets.get(latest_monday - timedelta(weeks=i), 0))
-        for i in range(weeks - 1, -1, -1)
-    ]
-
-
 def _git_history(local_path: Path) -> dict:
     """
     Commit activity, contributors, hotspot files, and a recent-activity
-    series -- entirely from `git log` against the local clone. Returns
+    series -- entirely from `git log` against the local clone, via the
+    shared git_history module (also used by repo_evolution_tool, so
+    there's exactly one place that parses `git log`). Returns
     {"available": False, "reason": ...} if this isn't a git repo or git
     isn't on PATH, so callers can report that honestly instead of
     crashing or guessing.
     """
 
-    if not (local_path / ".git").exists():
-        return {"available": False, "reason": "not a git repository"}
-
-    log_output = _run_git(
-        local_path,
-        ["log", "--format=%H|%aI|%an", "--date=iso-strict"],
-    )
-    if log_output is None:
-        return {"available": False, "reason": "git log failed (git not available, or no commits)"}
-
-    commits = []
-    for line in log_output.splitlines():
-        parts = line.split("|", 2)
-        if len(parts) == 3:
-            commits.append({"hash": parts[0], "date": parts[1], "author": parts[2]})
-
-    if not commits:
-        return {"available": False, "reason": "repository has no commits"}
-
-    total_commits = len(commits)
-    last_commit_date = commits[0]["date"]
-    first_commit_date = commits[-1]["date"]
-
-    commits_last_90d = _run_git(local_path, ["log", "--since=90 days ago", "--format=%H"])
-    commits_last_90d_count = len(commits_last_90d.splitlines()) if commits_last_90d else 0
-
-    author_counts = Counter(c["author"] for c in commits)
-    top_author, top_author_commits = author_counts.most_common(1)[0]
-    bus_factor_pct = round(100 * top_author_commits / total_commits, 1)
-
-    name_only = _run_git(local_path, ["log", "--format=format:", "--name-only"])
-    file_change_counts = Counter(
-        line for line in (name_only.splitlines() if name_only else []) if line.strip()
-    )
-    hotspots = file_change_counts.most_common(TOP_N)
-
-    return {
-        "available": True,
-        "total_commits": total_commits,
-        "first_commit_date": first_commit_date,
-        "last_commit_date": last_commit_date,
-        "commits_last_90_days": commits_last_90d_count,
-        "contributor_count": len(author_counts),
-        "top_contributors": author_counts.most_common(TOP_N),
-        "bus_factor_top_author": top_author,
-        "bus_factor_pct": bus_factor_pct,
-        "hotspot_files": hotspots,
-        "weekly_activity": _weekly_activity(commits),
-    }
+    return basic_history(local_path, top_n=TOP_N)
 
 
 def _has_python_docstring(content: str) -> bool:
@@ -890,7 +787,11 @@ SYSTEM_PROMPT = (
     "the repo has been verified free of vulnerabilities; only speak to what "
     "the pattern scan actually found. The complexity section is an "
     "APPROXIMATION, not real cyclomatic complexity -- frame it accordingly.\n\n"
-    "Produce a report with exactly these sections, in this order:\n\n"
+    "Produce a report with exactly these sections, in this order. Format EVERY "
+    "section heading as a markdown '##' header (e.g. '## 1. OVERALL SUMMARY') -- "
+    "the UI's renderer specifically looks for that markdown syntax, and a "
+    "differently-styled heading (plain numbered text, bold text with no '##') "
+    "won't render as a heading at all.\n\n"
     "1. OVERALL SUMMARY -- 2-4 sentences giving a genuine, specific read on "
     "this repo's health, opening with the Health Score and citing at least "
     "two other actual numbers below. Not a generic 'this repo looks fine' -- "
@@ -969,10 +870,16 @@ def compute_health(repository_name: str, local_path: Path) -> dict:
     return health
 
 
-def narrate_health(report_text: str) -> str:
-    """The LLM narrative pass over an already-computed report_text block."""
+def narrate_health(
+    report_text: str, persona: Optional[str] = None, conversation_context: Optional[str] = None,
+) -> str:
+    """The LLM narrative pass over an already-computed report_text block.
+    `persona` only changes how this gets explained -- report_text itself
+    (every number) is already fixed before this is ever called.
+    conversation_context defaults to None because the Health Check
+    button's direct endpoint calls this with no chat history at all."""
 
-    return call_llm(SYSTEM_PROMPT, report_text)
+    return call_llm(SYSTEM_PROMPT, report_text, persona=persona, conversation_context=conversation_context)
 
 
 def _sources_from_health(health: dict) -> list:
@@ -1004,7 +911,11 @@ def act_repo_health(state: dict) -> dict:
     state["context_used"] = health["report_text"]
 
     try:
-        reply = narrate_health(health["report_text"])
+        reply = narrate_health(
+            health["report_text"],
+            persona=state.get("persona"),
+            conversation_context=state.get("conversation_context"),
+        )
     except Exception as exc:
         return llm_error(state, TOOL_NAME, exc)
 

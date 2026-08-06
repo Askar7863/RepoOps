@@ -675,6 +675,32 @@ def _imports_chunk(result, lines: List[str], repo_name: str, relative_path: str,
     )
 
 
+def check_syntax_errors(language: str, content: str) -> List[str]:
+    """
+    Real, tree-sitter-backed syntax validation for a piece of generated
+    code -- used by code_writer.py to confirm a write didn't produce
+    invalid syntax before reporting success. This only catches parse-level
+    errors (an unbalanced brace, a `case` clause with no enclosing switch)
+    -- it's the same grammar chunk_code_file's own parse relies on, not a
+    real type checker, so an undefined name or wrong type is invisible to
+    it. Returns an empty list on any internal failure (unsupported
+    language, parser error) rather than raising -- a failed syntax check
+    must never be the reason a legitimate write gets blocked.
+    """
+    try:
+        result = tlp.process(content, tlp.ProcessConfig(
+            language=language, structure=False, imports=False, exports=False,
+            diagnostics=True,
+        ))
+    except Exception:
+        return []
+
+    return [
+        d.message for d in result.diagnostics
+        if d.severity == tlp.DiagnosticSeverity.ERROR
+    ]
+
+
 def chunk_code_file(file_path: Path, repo_root: Path) -> List[Dict]:
     """
     Split a source file into semantic chunks using tree-sitter.

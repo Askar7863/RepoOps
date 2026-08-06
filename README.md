@@ -127,7 +127,8 @@ app/agent/                  -- orchestration (LangGraph)
                           -- go.mod is detected but not parsed, see
                           _dependencies for why)
                         - SECURITY: a STATIC pattern scan only (secret-
-                          shaped strings, committed .env, .gitignore
+                          shaped strings, committed .env, 
+                          ignore
                           presence) -- explicitly NOT a vulnerability/
                           CVE audit, labeled as such everywhere it's
                           surfaced
