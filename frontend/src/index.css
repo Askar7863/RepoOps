@@ -1,0 +1,125 @@
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "tailwindcss";
+
+/* This app has exactly one theme -- always dark, regardless of the
+   user's OS color-scheme setting. Without this, shadcn-generated
+   components' `dark:` utility classes (button.tsx has several) would
+   key off `prefers-color-scheme` and silently not apply for anyone
+   whose OS is set to light mode, even though the app itself never
+   offers a light theme at all. index.html sets class="dark" on <html>
+   unconditionally to match. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", system-ui, sans-serif;
+
+  /* Type scale from the brief: title/section/body/caption. */
+  --text-title: 30px;
+  --text-title--line-height: 1.25;
+  --text-section: 20px;
+  --text-section--line-height: 1.35;
+  --text-body: 15px;
+  --text-body--line-height: 1.6;
+  --text-caption: 13px;
+  --text-caption--line-height: 1.5;
+
+  /* -------------------------------------------------------------------
+     The 8 design tokens from the brief, mapped directly onto shadcn's
+     own semantic slot names -- Tailwind v4 auto-generates a full set of
+     utilities (bg-*, text-*, border-*, ...) from every --color-* key
+     here, so there is exactly ONE name per color, not a literal name
+     duplicated by a same-valued semantic alias. Two deliberate
+     exceptions, per the contrast table in the plan (section 5):
+
+       - --color-primary-foreground is near-black (--color-background),
+         not white -- white text on the accent fill fails contrast at
+         ~2.2:1.
+       - --color-muted-foreground is text-secondary (#B6B6B6), not the
+         dimmest brief tone (#8B8B8B, kept separately as --color-dim) --
+         dim-on-hover-surface borders on failing AA (~4.5:1), and
+         shadcn's own hover/disabled states lean on muted-foreground
+         pervasively.
+
+     "Sidebar" (#111214) and "dim" (#8B8B8B) are the only two brief
+     tokens with no shadcn-semantic equivalent, so they stay as their
+     own standalone keys.
+     ------------------------------------------------------------------- */
+  --color-background: #0b0b0d;
+  --color-foreground: #ffffff;
+
+  --color-sidebar: #111214;
+
+  --color-card: #17181b;
+  --color-card-foreground: #ffffff;
+
+  --color-popover: #17181b;
+  --color-popover-foreground: #ffffff;
+
+  --color-primary: #d4a574;
+  --color-primary-foreground: #0b0b0d;
+
+  --color-secondary: #1b1d21;
+  --color-secondary-foreground: #ffffff;
+
+  --color-muted: #23252b;
+  --color-muted-foreground: #b6b6b6;
+
+  --color-accent: #23252b;
+  --color-accent-foreground: #ffffff;
+
+  --color-destructive: #d03b3b;
+  --color-destructive-foreground: #ffffff;
+
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-input: #1b1d21;
+  --color-ring: #d4a574;
+
+  --color-dim: #8b8b8b;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer components {
+  /* Restrained hljs theme mapped onto our own tokens, not a stock
+     highlight.js theme -- keeps code blocks visually consistent with
+     the rest of the app instead of importing an unrelated color set. */
+  .hljs {
+    color: var(--color-foreground);
+    background: transparent;
+  }
+  .hljs-comment,
+  .hljs-quote {
+    color: var(--color-muted-foreground);
+    font-style: italic;
+  }
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-literal,
+  .hljs-attr {
+    color: var(--color-primary);
+  }
+  .hljs-string,
+  .hljs-addition {
+    color: #9ecb8f;
+  }
+  .hljs-title,
+  .hljs-section,
+  .hljs-name {
+    color: var(--color-foreground);
+    font-weight: 600;
+  }
+  .hljs-deletion {
+    color: var(--color-destructive);
+  }
+}

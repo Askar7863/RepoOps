@@ -666,7 +666,14 @@ def _format_report(repo_name: str, health: dict) -> str:
         for key, weight in _HEALTH_SCORE_WEIGHTS.items():
             val = health["sub_scores"].get(key)
             if val is not None:
-                lines.append(f"  - {key.replace('_', ' ').title()} score: {val}/100 (weight {int(weight * 100)}%)")
+                note = (
+                    " -- this is a DERIVED score (100 minus the top contributor's raw commit "
+                    "percentage reported below under REPO ACTIVITY; higher score = ownership is "
+                    "LESS concentrated = healthier); it is a different number from that raw "
+                    "percentage, not a contradiction of it"
+                    if key == "bus_factor" else ""
+                )
+                lines.append(f"  - {key.replace('_', ' ').title()} score: {val}/100 (weight {int(weight * 100)}%){note}")
     else:
         lines.append("(unavailable: no sub-scores could be computed)")
 
@@ -706,6 +713,14 @@ def _format_report(repo_name: str, health: dict) -> str:
     lines.append("=== REPOSITORY SIZE ===")
     lines.append(f"On-disk size: {size_info['total_size_mb']} MB across {size_info['file_count']} files (excluding .git)")
     lines.append(f"Total lines (text files only): {size_info['total_lines']:,}")
+    if code_health.get("available") and size_info["file_count"] != code_health["total_files"]:
+        lines.append(
+            f"(Note: this {size_info['file_count']}-file count is every file on disk, not the same "
+            f"measurement as CODE HEALTH's {code_health['total_files']} above, which counts only "
+            "files that were actually indexed/chunked -- most files here were filtered out before "
+            "indexing, e.g. as data/generated/non-source content. Both numbers are correct; they "
+            "measure different things.)"
+        )
 
     lines.append("")
     lines.append("=== DEPENDENCIES ===")
@@ -787,6 +802,15 @@ SYSTEM_PROMPT = (
     "the repo has been verified free of vulnerabilities; only speak to what "
     "the pattern scan actually found. The complexity section is an "
     "APPROXIMATION, not real cyclomatic complexity -- frame it accordingly.\n\n"
+    "The Bus Factor score (in the HEALTH SCORE section) and the top contributor's "
+    "raw commit percentage (in REPO ACTIVITY & MAINTENANCE) are two DIFFERENT "
+    "numbers, not two ways of stating the same figure -- the score is 100 minus "
+    "that percentage, so a HIGHER score means LESS ownership concentration. "
+    "Every time you mention the Bus Factor score anywhere in the report, say in "
+    "the same sentence that it's a derived score (not the raw percentage) and, "
+    "if you also cite the raw percentage, name that separately too -- never "
+    "present the score value as if it equals the top contributor's share of "
+    "commits.\n\n"
     "Produce a report with exactly these sections, in this order. Format EVERY "
     "section heading as a markdown '##' header (e.g. '## 1. OVERALL SUMMARY') -- "
     "the UI's renderer specifically looks for that markdown syntax, and a "

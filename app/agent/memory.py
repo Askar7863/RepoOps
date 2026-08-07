@@ -112,6 +112,17 @@ def add_turn(user_message: str, assistant_reply: str, tool_used: Optional[str] =
         _fold_into_summary(_turns.pop(0))
 
 
+def last_turn() -> Optional[dict]:
+    """The most recently completed turn ({"user", "assistant", "tool_used"}),
+    or None if there isn't one yet. Structured access for callers that need
+    to reason about what just happened (e.g. a status-check fast path
+    recognizing "did that work?" as a follow-up to the last tool call),
+    as opposed to build_context()'s flattened text block meant only for
+    injection into an LLM prompt."""
+
+    return _turns[-1] if _turns else None
+
+
 def build_context() -> str:
     """The text block to prepend to a tool's LLM call -- "" (a true
     no-op) when there's no conversation yet, so the very first message

@@ -31,7 +31,6 @@ class AgentState(TypedDict, total=False):
     # ---- classifier/router output ----
     chosen_tool: str | None
     tool_args: dict
-    classifier_reply: str | None
 
     # ---- tool execution output ----
     reply: str | None

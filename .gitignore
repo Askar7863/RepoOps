@@ -10,3 +10,6 @@ bm25_db/
 *.db
 repos/
 .active_repository
+
+frontend/node_modules/
+frontend/dist/

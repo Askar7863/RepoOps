@@ -13,8 +13,17 @@ pip install -r requirements.txt
 
 cp .env.example .env       # then fill in your Azure OpenAI credentials
 
+cd frontend && npm install && npm run build && cd ..   # builds the React frontend once
+
 python -m app.main
 ```
+
+The frontend lives in `frontend/` (React + TypeScript + Tailwind + shadcn/ui)
+and is a separate project from the Python backend. `npm run build` produces
+`frontend/dist/`, which `app/main.py` serves directly -- no separate frontend
+server needed for normal use. For frontend development with hot reload, run
+`npm run dev` inside `frontend/` (proxies `/api/*` to the backend on 8020) and
+use <http://localhost:5173> instead while iterating on UI code.
 
 That runs uvicorn with `--reload` restricted to `app/` only (see the
 `if __name__ == "__main__"` block at the bottom of `main.py`). If you'd
@@ -45,7 +54,11 @@ a cryptic `ModuleNotFoundError` deep inside `chunker.py`.
 app/main.py                 -- FastAPI entrypoint (the only file you run)
   POST /api/repositories/load    clone -> scan -> filter -> chunk -> index
   POST /api/chat                 run one message through the agent graph
-  GET  /                         serves index.html
+  GET  /*                        serves the built frontend (frontend/dist/)
+
+frontend/                    -- React + TypeScript + Tailwind + shadcn/ui,
+                                 a separate project built with `npm run build`
+                                 (see Setup above); not part of the Python app
 
 app/active_repo.py           -- which repo is currently loaded, persisted
                                  to .active_repository at the project root

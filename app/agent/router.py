@@ -178,7 +178,7 @@ CONTEXT_PREFIX = (
 def classify_intent(state: dict) -> dict:
     """
     Ask the LLM whether this message needs a tool, and if so, which one.
-    Mutates and returns state with chosen_tool / tool_args / classifier_reply set.
+    Mutates and returns state with chosen_tool / tool_args set.
     """
 
     log_step("ROUTER CLASSIFICATION")
@@ -204,7 +204,6 @@ def classify_intent(state: dict) -> dict:
         log_info(f"Router LLM call failed: {exc}")
         state["chosen_tool"] = None
         state["tool_args"] = {}
-        state["classifier_reply"] = None
         state["error"] = str(exc)
         return state
 
@@ -212,9 +211,16 @@ def classify_intent(state: dict) -> dict:
     tool_calls = getattr(message, "tool_calls", None)
 
     if not tool_calls:
-        state["chosen_tool"] = None 
+        # message.content is the router's own free-text reply, generated
+        # as a side effect of this tool_choice="auto" call deciding no
+        # tool applies -- deliberately discarded, not stored. It runs at
+        # temperature=0 with no persona lens, so using it as the final
+        # answer (as this used to, via a "classifier_reply" field) made
+        # every general_chat reply identical across personas regardless of
+        # which one was selected. act_general_chat generates the real,
+        # persona-aware reply itself.
+        state["chosen_tool"] = None
         state["tool_args"] = {}
-        state["classifier_reply"] = message.content
         log_info("Chosen tool: none (general chat)")
         return state
 
@@ -225,12 +231,24 @@ def classify_intent(state: dict) -> dict:
     except (json.JSONDecodeError, TypeError):
         args = {}
 
-    if "query" not in args:
+    chosen_tool = call.function.name
+
+    # repo_summarizer_tool/repo_health_tool/repo_evolution_tool's own schemas
+    # all declare "query" as verbatim -- but the model doesn't reliably keep
+    # that promise: confirmed in practice, a self-contained follow-up
+    # question got its "query" arg rewritten to reference the PREVIOUS
+    # turn's file instead of the one actually named in the current message,
+    # because conversation_context (included above so the router can resolve
+    # pronouns/"that file") bled into the argument it constructed. Since the
+    # raw message is already exactly what these three schemas ask for,
+    # trust it over whatever the model reconstructed. code_writer_tool's
+    # schema is the one exception that explicitly permits "lightly
+    # rephrased for search" -- only that tool keeps the model's own query.
+    if chosen_tool != "code_writer_tool" or "query" not in args:
         args["query"] = state["message"]
 
-    state["chosen_tool"] = call.function.name
+    state["chosen_tool"] = chosen_tool
     state["tool_args"] = args
-    state["classifier_reply"] = None
 
     log_info(f"Chosen tool: {state['chosen_tool']}")
 

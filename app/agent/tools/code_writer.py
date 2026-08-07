@@ -109,7 +109,7 @@ import tiktoken
 from ... import config
 from ...utils.logger import log_error, log_info, log_warning
 from ...github.chunker import find_symbol_bounds, check_syntax_errors
-from ...github.language import detect_category, tree_sitter_language_name
+from ...github.language import detect_category, tree_sitter_language_name, NOT_CODE_EXTENSIONS
 from ...rag.retriever import retrieve_chunks
 from ...rag.indexer import reindex_file
 from ...rag.sparse_store import get_all_chunks
@@ -318,7 +318,20 @@ WRITE_CODE_SYSTEM_PROMPT = (
     "progress on the request. In that situation, do NOT append the import either -- "
     "instead, set `code` to an empty string and use `summary` to plainly say this file "
     "can't be safely auto-edited and exactly what a human needs to add there by hand (including the "
-    "import, if one is needed); you'll still be skipped safely.\n\n"
+    "import, if one is needed); you'll still be skipped safely.\n"
+    "- If the request asks to DELETE or REMOVE a file entirely, or delete a whole "
+    "function/class/symbol outright (make it gone, not replace it with something), that is "
+    "not something any of the three operations can do -- there is no delete operation, full "
+    "stop. Do NOT approximate deletion by emptying a symbol's body, replacing it with "
+    "unrelated code, or regenerating the file as blank -- confirmed as a real failure: doing "
+    "this once silently erased a real, load-bearing function while looking like an ordinary "
+    "edit. Set `code` to an empty string and phrase `summary` as a plain, direct decline "
+    "naming the real limitation, e.g. 'Deleting files/symbols isn't something I can do -- I "
+    "can only create a file, append to one, or replace part of one. If you want <name> "
+    "removed, delete it yourself; if you meant something I can do instead (like clearing its "
+    "content), tell me that and I will.' Never restate the request back as if describing an "
+    "action taken (e.g. 'This change deletes X') -- worded that way it reads as confirmation "
+    "that something happened, when nothing did.\n\n"
     "Reference the real file_path/symbol_name for a NEW file consistently with how it's "
     "shown to you when it was decided in an earlier call this same request. Produce a "
     "complete, valid change for just this one file.\n\n"
@@ -430,6 +443,15 @@ def _dedupe_targets(targets: List[dict]) -> List[dict]:
     the exact same result, but nothing guarantees that, since it's an
     independent LLM call. A hard, code-level guarantee here is safer
     than trusting the prompt alone to never repeat itself.
+
+    Compares paths with backslashes normalized to forward slashes --
+    confirmed as a real gap in the plain-string dedup this replaced: two
+    targets differing only in slash direction ('Adobe/x.csv' vs
+    'Adobe\\x.csv') survived it as "different" files, even though
+    resolve_target() resolves both to the identical file on disk, which
+    let a real batch plan two writes at what was actually one target
+    (see _apply_write's already_written_this_batch handling for the
+    write-time safety net this dedup gap let slip through once).
     """
 
     seen = set()
@@ -439,9 +461,12 @@ def _dedupe_targets(targets: List[dict]) -> List[dict]:
         if not isinstance(t, dict):
             continue
         path = (t.get("file_path") or "").strip().lstrip("/\\")
-        if not path or path in seen:
+        if not path:
             continue
-        seen.add(path)
+        normalized = path.replace("\\", "/")
+        if normalized in seen:
+            continue
+        seen.add(normalized)
         deduped.append({**t, "file_path": path})
 
     return deduped
@@ -717,6 +742,7 @@ _APPEND_SAFE_TEXT_EXTENSIONS = {".txt"}
 
 def _apply_write(
     local_path: Path, target: Path, operation: str, symbol_name: Optional[str], code: str,
+    already_written_this_batch: bool = False,
 ) -> Optional[dict]:
     """
     Perform the write; returns what actually happened (may differ from
@@ -726,6 +752,25 @@ def _apply_write(
     operation is replace_symbol and the target symbol can't be safely
     located (see _replace_symbol) -- the caller reports this as a clean
     failure rather than guessing.
+
+    `already_written_this_batch` only changes behavior for the plain-data
+    formats in NOT_CODE_EXTENSIONS (.csv/.tsv) -- confirmed as a real bug
+    when a single batch plans two changes against the SAME such file: the
+    second call's "replace the whole file" silently discarded the first
+    call's write, even though the reply reported both as applied. For
+    those specifically, a repeat write appends instead, since each call's
+    payload there is a genuine small fragment, not a full document.
+
+    It deliberately does NOT change behavior for a true whole-document
+    format (HTML/CSS/JSON/YAML/TOML/ini, or anything unrecognized) --
+    confirmed as a real regression from an earlier version of this same
+    fix that treated all non-code formats alike: a repeat write to an
+    HTML file appended the model's freshly regenerated COMPLETE document
+    after the one already written moments earlier in the same batch,
+    doubling the entire file (both `<!DOCTYPE html>`, both `<head>`s,
+    everything). These formats always regenerate the whole document on
+    every call regardless of repeat status (see the comment below), so
+    replacing again -- not appending -- is still the only safe behavior.
     """
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -754,7 +799,15 @@ def _apply_write(
     # keep the original nuanced behavior below, since a new function --
     # or a new line in a requirements.txt -- genuinely can coexist with
     # the rest of the file.
-    if detect_category(target) != "code" and target.suffix.lower() not in _APPEND_SAFE_TEXT_EXTENSIONS:
+    suffix = target.suffix.lower()
+    # A repeat write only gets to "coexist via append" for the plain-data
+    # formats (.csv/.tsv) where a single call's payload is already a small
+    # fragment, not a full document -- everything else that isn't code/
+    # append-safe-text still always replaces, repeat or not (see the
+    # docstring above for why this distinction matters).
+    repeat_can_append = already_written_this_batch and suffix in NOT_CODE_EXTENSIONS
+
+    if detect_category(target) != "code" and suffix not in _APPEND_SAFE_TEXT_EXTENSIONS and not repeat_can_append:
         target.write_text(code, encoding="utf-8")
         return {
             "note": f"replaced the whole file (non-code format; requested operation was '{operation}')",
@@ -1164,8 +1217,16 @@ def act_code_writer(state: dict) -> dict:
         if file_path not in snapshots:
             snapshots[file_path] = _snapshot(target)
 
+        # Compared via the RESOLVED path, not the raw file_path string --
+        # two independent generation calls can name the same real file
+        # with different slash directions ('Adobe/x.csv' vs 'Adobe\x.csv'),
+        # which resolve_target() resolves identically but a raw string
+        # comparison would treat as different targets, missing the exact
+        # same-file collision this check exists to catch.
+        already_written_this_batch = any(a["target"] == target for a in applied)
+
         try:
-            result = _apply_write(local_path, target, operation, symbol_name, code)
+            result = _apply_write(local_path, target, operation, symbol_name, code, already_written_this_batch)
         except Exception as exc:
             log_error(f"{TOOL_NAME} failed to write {target}: {exc}")
             failure = f"I generated the code for `{file_path}` but couldn't write it to disk: {exc}"

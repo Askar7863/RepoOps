@@ -84,17 +84,35 @@ EXTRACT_SCOPE_SCHEMA = [
                 "properties": {
                     "focus": {
                         "type": "string",
-                        "enum": ["activity", "last_commit", "file_history", "ownership", "change_intent", "compare", "risk"],
+                        "enum": ["activity", "last_commit", "file_history", "ownership", "change_intent", "compare", "risk", "not_applicable"],
                         "description": (
-                            "activity: general commit velocity/contributor TRENDS over a window (the "
-                            "default when nothing more specific applies) -- NOT for a question about "
+                            "not_applicable: the question is NOT actually a repository-history question at "
+                            "all, even though it landed here -- e.g. 'does this file currently exist', 'is "
+                            "it still there', 'was that change actually applied', 'check the previous "
+                            "operation'. These ask about the LIVE current state of a file or a just-"
+                            "requested action, not git history -- git log cannot answer them, and none of "
+                            "the other 6 focuses are a real fit either. Pick this rather than forcing the "
+                            "question into activity (or any other focus) just because it's the default; "
+                            "forcing a live-state question into a history focus produces a confident-"
+                            "sounding but entirely unrelated answer, which is worse than admitting this "
+                            "tool can't help. activity: general commit velocity/contributor TRENDS over a "
+                            "window (the default when nothing more specific applies, but ONLY among "
+                            "genuine history questions) -- NOT for a question about "
                             "one single commit's own detail. last_commit: detail of the single most "
-                            "recent commit itself -- 'when was the last commit', 'what/how many files "
-                            "changed in the last commit', 'who made the latest commit', 'what did the "
-                            "most recent commit do'. Use this, not activity, whenever the question is "
-                            "about ONE specific commit (the latest one) rather than a trend over many. "
-                            "file_history: the history of one specific file or directory named in the "
-                            "query. ownership: who owns/is responsible for a file, directory, or the "
+                            "recent commit to the REPO AS A WHOLE -- 'when was the last commit', "
+                            "'what/how many files changed in the last commit', 'who made the latest "
+                            "commit', 'what did the most recent commit do'. Use this, not activity, "
+                            "whenever the question is about ONE specific commit (the latest one) rather "
+                            "than a trend over many -- but ONLY when no specific file or directory is "
+                            "named. The instant a query names a file or path AND asks when/how it was "
+                            "last changed, modified, touched, or updated -- e.g. 'when was indexer.py "
+                            "last modified', 'when did main.py last change' -- that is file_history, "
+                            "NEVER last_commit or activity, even though the phrasing looks identical to "
+                            "a last-commit question. last_commit and activity both ignore any path you "
+                            "extract, so picking either one for a file-specific question silently "
+                            "discards the filename and answers about the wrong thing. file_history: the "
+                            "history of one specific file or directory named in the query. ownership: "
+                            "who owns/is responsible for a file, directory, or the "
                             "whole repo -- bus-factor / knowledge-risk questions. change_intent: what "
                             "KIND of changes have been happening (bug fixes vs. features vs. refactors "
                             "vs. docs). compare: what changed between two tags/branches/commits. risk: "
@@ -136,6 +154,20 @@ EXTRACT_SCOPE_SYSTEM_PROMPT = (
     "names a file, an owner/risk question, a kind-of-change question, or two refs to "
     "compare; otherwise default to activity. Never invent a path, date, or ref the "
     "query doesn't name -- leave it null.\n\n"
+    "Before picking any of the other 7 values, check whether this is a repository-"
+    "HISTORY question at all. Something asking about the file's or a change's CURRENT, "
+    "live state right now -- 'does this file exist', 'is it still there', 'was that "
+    "actually deleted/applied', 'check the previous operation' -- is not a history "
+    "question, and 'activity' being the default does not mean it's the fallback for "
+    "everything; use `not_applicable` for these instead. Only reach for `not_applicable` "
+    "when the question is genuinely about live current state or an unrelated topic, not "
+    "merely because it's phrased unusually for a real history question.\n\n"
+    "Rule that overrides all others: if the query names a specific file or directory, "
+    "extract it into `path` no matter which focus you pick. If that same query is "
+    "asking when/how recently that file changed, the focus MUST be file_history, not "
+    "last_commit or activity -- those two foci never look at `path` at all, so using "
+    "either one for a file-specific question silently throws the filename away and "
+    "produces an answer about the wrong thing.\n\n"
     "You do not know today's actual date, and confidently guessing one is a real, "
     "confirmed failure mode -- for 'the last year', computing your own absolute "
     "start/end dates has produced a window off by several years, silently making "
@@ -234,11 +266,30 @@ def _compute_last_commit(local_path: Path) -> dict:
     }
 
 
+def _resolve_pathspec(local_path: Path, path: str) -> str:
+    """
+    The scope extractor pulls a path straight out of the user's wording --
+    'indexer.py' -- which is rarely the file's real root-relative path
+    ('app/rag/indexer.py'). `git log -- <path>` only matches an EXACT
+    root-relative path, so a bare filename for a file that lives deeper in
+    the tree silently matches zero commits instead of erroring -- confirmed
+    as a real failure mode, not hypothetical. If the path doesn't exist
+    as-is under the repo root, fall back to a recursive glob so git matches
+    it at any depth. (Not `:(glob)` pathspec magic -- that's rejected
+    together with --follow; a plain `**/` prefix works with --follow.)
+    """
+
+    if (local_path / path).exists():
+        return path
+    return f"**/{path.lstrip('/')}"
+
+
 def _compute_file_history(local_path: Path, path: Optional[str], since: Optional[str], until: Optional[str]) -> dict:
     if not path:
         return {"available": False, "reason": "no file or directory named in the query"}
 
-    commits = log_commits(local_path, since=since, until=until, paths=[path], follow=True)
+    pathspec = _resolve_pathspec(local_path, path)
+    commits = log_commits(local_path, since=since, until=until, paths=[pathspec], follow=True)
     if commits is None:
         return {"available": False, "reason": "not a git repository"}
     if not commits:
@@ -259,7 +310,7 @@ def _compute_file_history(local_path: Path, path: Optional[str], since: Optional
 
 
 def _compute_ownership(local_path: Path, path: Optional[str], since: Optional[str], until: Optional[str]) -> dict:
-    scope_paths = [path] if path else None
+    scope_paths = [_resolve_pathspec(local_path, path)] if path else None
     rows = file_touches_with_author(local_path, since=since, until=until, paths=scope_paths)
     if not rows:
         return {"available": False, "reason": "no file touches found for this scope"}
@@ -604,7 +655,13 @@ SYSTEM_PROMPT = (
     "You are reporting on a repository's git HISTORY -- how it evolved, not what "
     "its current code does. You are given PRE-COMPUTED, exact numbers below -- use "
     "ONLY these numbers. Do not invent additional statistics, dates, contributor "
-    "names, or file paths not present in the data. Where a section says "
+    "names, or file paths not present in the data. This block is deliberately "
+    "narrow per focus -- e.g. the last_commit block never includes a total commit "
+    "count or a contributor breakdown, on purpose. If a fact you'd normally mention "
+    "(a commit total, a bus-factor percentage, a contributor count) is simply not "
+    "in the block below, do not estimate it, round it from something else, or add "
+    "commentary that implies you know it -- omit that point entirely rather than "
+    "filling the gap with a plausible-sounding number. Where a section says "
     "'(unavailable: ...)', say so plainly instead of guessing. This tool never "
     "generates or modifies code -- if the user's question also asks for a fix or a "
     "change to be made, answer only the history/analysis part and note that making "
@@ -643,6 +700,37 @@ def _sources_from_focus(focus: str, path: Optional[str], data: dict) -> list:
     return []
 
 
+# Pre-written per-persona phrasing, same reasoning as status_check.py's
+# equivalents -- this path makes no LLM call (nothing was computed to
+# narrate), so persona can't reach it via a lens injected into a prompt
+# the way the other 4 tools' narration calls get it. Facts identical
+# across all three; only phrasing differs.
+def _not_applicable_reply(persona: Optional[str]) -> str:
+    if persona == "student":
+        return (
+            "That's not something I can figure out from this repository's git history -- "
+            "git log only knows about past commits, not the CURRENT, live state of a file "
+            "or whether something you just asked for actually happened. If you want to know "
+            "whether a specific file still exists, or whether a recent change took effect, "
+            "just name the file directly and I'll check the real file on disk instead of "
+            "digging through its history."
+        )
+    if persona == "architect":
+        return (
+            "Out of scope for this tool: git history captures past commits, not current "
+            "filesystem state or the outcome of a just-requested action -- a structurally "
+            "different question. Name the file directly for a live filesystem check instead."
+        )
+    return (
+        "This isn't something I can determine from this repository's git history -- "
+        "it reads like a question about the CURRENT, live state of a file or a "
+        "just-made change, not its commit history, and I don't have a way to check "
+        "that from here. If you're asking whether a specific file still exists or "
+        "whether a recent change actually took effect, name the file directly and "
+        "I'll check it against the real filesystem instead of its history."
+    )
+
+
 def act_repo_evolution(state: dict) -> dict:
     if state.get("local_path") is None:
         return no_repo(state, TOOL_NAME)
@@ -660,6 +748,35 @@ def act_repo_evolution(state: dict) -> dict:
     focus = scope.get("focus") or "activity"
     path = scope.get("path")
     since, until = scope.get("since"), scope.get("until")
+
+    # Deterministic safety net, independent of whatever the classifier
+    # picked: last_commit and activity both ignore `path` entirely (see
+    # _compute_last_commit/_compute_activity above), so a path here paired
+    # with either focus is already an inconsistent result -- the filename
+    # would be silently discarded and the report would answer about the
+    # wrong thing. Confirmed as a real failure mode in practice, not a
+    # hypothetical. file_history is the only one of the two path-aware foci
+    # that a plain "when was X last touched" question could have meant.
+    if path and focus in ("last_commit", "activity"):
+        focus = "file_history"
+
+    if focus == "not_applicable":
+        # No compute/narration step at all -- there's nothing to narrate.
+        # Confirmed as a real, reproducible failure this replaces: this
+        # kind of question used to fall through to the "activity" default,
+        # producing a confident, real-sounding, but entirely unrelated
+        # commit-history report instead of the honest "I can't check that
+        # from here" this actually deserves.
+        state["reply"] = _not_applicable_reply(state.get("persona"))
+        state["sources"] = []
+        state["tool_used"] = TOOL_NAME
+        state["context_used"] = "Scope classifier determined this is not a repository-history question (focus=not_applicable)."
+        # Fixed, honest text with nothing computed to get wrong -- no LLM
+        # narration happened, so there's nothing for verify_answer to
+        # meaningfully check either.
+        state["verified"] = True
+        state["verification_reason"] = "Fixed response, no narration or computed data involved -- nothing to verify."
+        return state
 
     if focus == "activity":
         data = _compute_activity(local_path, since, until)

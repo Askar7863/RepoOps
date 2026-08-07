@@ -54,8 +54,8 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from .active_repo import get_active_repository, set_active_repository
 from .github.clone import clone_repository, REPO_STORAGE
@@ -101,8 +101,19 @@ def _resolve_persona(persona: str | None) -> str:
     return persona if persona in _VALID_PERSONAS else _DEFAULT_PERSONA
 
 
+# A chat message with no length cap reaches the router/tool LLM calls
+# verbatim -- confirmed in practice, a 600KB message took ~44s and only
+# succeeded because the underlying tool call happened to fail cleanly
+# into its own llm_error fallback rather than crash. That's the right
+# behavior for a genuine over-length request, but there's no reason to
+# let an unbounded payload tie up a worker thread for tens of seconds at
+# all. 8000 characters is comfortably above any real chat question or
+# code-change request this app's tools are designed to handle.
+MAX_CHAT_MESSAGE_LENGTH = 8000
+
+
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
     persona: str | None = None
 
 
@@ -111,7 +122,7 @@ class HealthRequest(BaseModel):
 
 
 class RepositoryRequest(BaseModel):
-    repo_url: str
+    repo_url: str = Field(min_length=1, max_length=2048)
 
 
 # ---------------------------------------------------------------------------
@@ -355,9 +366,12 @@ def load_repository(req: RepositoryRequest):
     }
 
 
-@app.get("/")
-def index():
-    return FileResponse(Path(__file__).parent / "index.html")
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+else:
+    log_error(f"Frontend build not found at {FRONTEND_DIST} -- run `npm run build` in frontend/ first.")
 
 
 if __name__ == "__main__":
