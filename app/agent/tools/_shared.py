@@ -38,18 +38,90 @@ OUTLINE_HANDLERS = {
     "config": chunk_config_file,
 }
 
+# ---------------------------------------------------------------------------
+# Personas -- an audience LENS on top of a tool's existing narration, never
+# a change to the underlying facts. Every tool here already separates
+# "compute the real numbers/content" from "have the LLM narrate them" --
+# this plugs into that same seam: the SAME computed data goes in regardless
+# of persona, only how it gets explained changes. A persona must never be
+# allowed to change which numbers, sources, or code get produced -- if it
+# ever does, that's a bug, not a feature.
+# ---------------------------------------------------------------------------
 
-def call_llm(system: str, user_content: str, temperature: float = DEFAULT_TEMPERATURE) -> str:
+PERSONA_LENSES = {
+    "student": (
+        "AUDIENCE LENS -- STUDENT: this reader is learning the codebase, not "
+        "already fluent in it. Favor CONCEPTUAL explanation over technical "
+        "mechanism -- explain what something is for and why it matters, before "
+        "(or instead of) exactly how it's implemented under the hood. Define any "
+        "technical term, acronym, or pattern name the first time you use it, in "
+        "plain language -- never assume it's already understood. Prefer everyday "
+        "analogies over jargon where they genuinely help. Where useful, point out "
+        "where a newcomer could look next to learn more. Keep the tone approachable "
+        "and patient, not clinical -- this is someone building a mental model, not "
+        "shipping a fix right now. Less technical, more conceptual, throughout."
+    ),
+    "developer": (
+        "AUDIENCE LENS -- DEVELOPER: this reader is actively working in this "
+        "codebase and already comfortable with programming concepts and this "
+        "project's terminology. Be technical and precise -- don't spend words "
+        "defining things a working developer already knows. Lead with the "
+        "concrete, actionable answer, citing exact files/functions/lines where "
+        "relevant. Keep it efficient: skip conceptual scene-setting unless it's "
+        "directly needed to act on the answer."
+    ),
+    "architect": (
+        "AUDIENCE LENS -- ARCHITECT: this reader is assessing the system as a "
+        "whole, not one task. Frame the answer in terms of structure, trade-offs, "
+        "and consequences -- what this means for maintainability, risk, and where "
+        "to invest effort -- rather than line-level implementation detail. Where "
+        "the data actually supports it, make an explicit recommendation or call "
+        "out a risk rather than only describing. Prioritize the few things that "
+        "matter strategically over an exhaustive walkthrough."
+    ),
+}
+
+
+def persona_lens(persona: Optional[str]) -> str:
+    """
+    The narration-framing paragraph for one persona, or "" for no persona
+    (None) or an unrecognized value -- deliberately a true no-op in that
+    case, not a fallback to some default paragraph, so any caller that
+    never passes a persona keeps today's EXACT prompt, unaffected by this
+    feature existing at all.
+    """
+
+    if not persona:
+        return ""
+    return PERSONA_LENSES.get(persona, "")
+
+
+def call_llm(
+    system: str,
+    user_content: str,
+    temperature: float = DEFAULT_TEMPERATURE,
+    persona: Optional[str] = None,
+    conversation_context: Optional[str] = None,
+) -> str:
     """Plain (non-tool-calling) chat completion. Raises on failure -- callers
-    are expected to catch and route through llm_error()."""
+    are expected to catch and route through llm_error().
+
+    conversation_context (see memory.py) is prepended to user_content, not
+    system -- it's per-turn grounding about what was already said, not a
+    change to the tool's own rules, so the strict "use only these
+    computed numbers" system prompts stay untouched by this feature."""
+
+    lens = persona_lens(persona)
+    full_system = f"{system}\n\n{lens}" if lens else system
+    full_user_content = f"{conversation_context}\n\n{user_content}" if conversation_context else user_content
 
     try:
         resp = get_client().chat.completions.create(
             model=config.AZURE_CHAT_DEPLOYMENT,
             temperature=temperature,
             messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
+                {"role": "system", "content": full_system},
+                {"role": "user", "content": full_user_content},
             ],
         )
         return resp.choices[0].message.content

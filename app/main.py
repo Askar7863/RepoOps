@@ -54,8 +54,8 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from .active_repo import get_active_repository, set_active_repository
 from .github.clone import clone_repository, REPO_STORAGE
@@ -65,6 +65,7 @@ from .github.chunker import chunk_repository
 from .rag.indexer import index_repository
 from .rag.chroma_store import delete_collection
 from .rag.sparse_store import delete_sparse_index
+from .agent import memory
 from .agent.pipeline import run_agent
 from .agent.tools.repo_health import compute_health, narrate_health
 
@@ -88,12 +89,40 @@ app.add_middleware(
 )
 
 
+_VALID_PERSONAS = {"student", "developer", "architect"}
+_DEFAULT_PERSONA = "developer"
+
+
+def _resolve_persona(persona: str | None) -> str:
+    """Falls back to the default (today's unchanged behavior) for a
+    missing or unrecognized value, rather than erroring -- an old/other
+    client that never sends a persona must keep working exactly as before."""
+
+    return persona if persona in _VALID_PERSONAS else _DEFAULT_PERSONA
+
+
+# A chat message with no length cap reaches the router/tool LLM calls
+# verbatim -- confirmed in practice, a 600KB message took ~44s and only
+# succeeded because the underlying tool call happened to fail cleanly
+# into its own llm_error fallback rather than crash. That's the right
+# behavior for a genuine over-length request, but there's no reason to
+# let an unbounded payload tie up a worker thread for tens of seconds at
+# all. 8000 characters is comfortably above any real chat question or
+# code-change request this app's tools are designed to handle.
+MAX_CHAT_MESSAGE_LENGTH = 8000
+
+
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
+    persona: str | None = None
+
+
+class HealthRequest(BaseModel):
+    persona: str | None = None
 
 
 class RepositoryRequest(BaseModel):
-    repo_url: str
+    repo_url: str = Field(min_length=1, max_length=2048)
 
 
 # ---------------------------------------------------------------------------
@@ -105,12 +134,16 @@ def chat(req: ChatRequest):
     state = {
         "message": req.message,
         "active_repository": get_active_repository() or "",
+        "persona": _resolve_persona(req.persona),
+        "conversation_context": memory.build_context(),
         "sources": [],
         "tool_used": "general_chat",
         "error": None,
     }
 
     state = run_agent(state)
+
+    memory.add_turn(req.message, state["reply"], state.get("tool_used"))
 
     return {
         "reply": state["reply"],
@@ -122,7 +155,7 @@ def chat(req: ChatRequest):
 
 
 @app.post("/api/repositories/health")
-def repository_health():
+def repository_health(req: HealthRequest = HealthRequest()):
     """
     Direct health-check endpoint for the UI's Health Check button --
     deliberately bypasses run_agent/classify_intent entirely. A button
@@ -148,7 +181,7 @@ def repository_health():
     health = compute_health(active, local_path)
 
     try:
-        narrative = narrate_health(health["report_text"])
+        narrative = narrate_health(health["report_text"], persona=_resolve_persona(req.persona))
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -264,6 +297,11 @@ def load_repository(req: RepositoryRequest):
 
         set_active_repository(local_path.name)
 
+        # A new repository is now active -- any conversation memory from
+        # before this point was grounded in a different (or no) repo, and
+        # would otherwise leak into follow-up answers about this one.
+        memory.reset()
+
         ###################################################
         # STEP 6 - DROP THE PREVIOUS REPOSITORY'S INDEX
         ###################################################
@@ -328,9 +366,12 @@ def load_repository(req: RepositoryRequest):
     }
 
 
-@app.get("/")
-def index():
-    return FileResponse(Path(__file__).parent / "index.html")
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+else:
+    log_error(f"Frontend build not found at {FRONTEND_DIST} -- run `npm run build` in frontend/ first.")
 
 
 if __name__ == "__main__":

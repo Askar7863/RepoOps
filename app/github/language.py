@@ -88,6 +88,17 @@ CONFIG_EXTENSIONS = {".json", ".yaml", ".yml", ".toml", ".ini"}
 # still indexed whole/paragraph-split rather than silently dropped.
 DOC_LIKE_MARKUP_EXTENSIONS = {".html", ".css", ".scss"}
 
+# tree-sitter-language-pack has a grammar for these (for editor syntax
+# highlighting), so detect_language_from_path below would otherwise call
+# them "code" -- but a grammar existing doesn't mean the format has
+# independently-appendable function/class symbols the way real source
+# code does. Confirmed as a real, harmful consequence, not theoretical:
+# code_writer_tool trusts category=="code" to mean "safe to append a
+# generated code block to," and appended a Python function directly into
+# a real .csv file's rows, corrupting it. These are plain tabular data,
+# not code, regardless of what tree-sitter can parse.
+NOT_CODE_EXTENSIONS = {".csv", ".tsv"}
+
 
 def detect_language(file: Path) -> str:
     """
@@ -116,6 +127,9 @@ def detect_category(file: Path) -> str | None:
 
     if suffix in DOC_EXTENSIONS or suffix in DOC_LIKE_MARKUP_EXTENSIONS:
         return "doc"
+
+    if suffix in NOT_CODE_EXTENSIONS:
+        return None
 
     # tree-sitter-language-pack knows ~300 grammars by extension; anything it
     # recognizes gets AST-aware code chunking.

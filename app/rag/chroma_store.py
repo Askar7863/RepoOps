@@ -70,55 +70,39 @@ def store_embeddings(
 
     collection = get_collection(collection_name)
 
-    ids = []
-    documents = []
-    embeddings = []
-    metadatas = []
-
-    for chunk in embedded_chunks:
-
-        ids.append(chunk["chunk_id"])
-
-        documents.append(
-            chunk["content"]
-        )
-
-        embeddings.append(
-            chunk["embedding"]
-        )
-
-        metadatas.append({
-
+    ids = [chunk["chunk_id"] for chunk in embedded_chunks]
+    documents = [chunk["content"] for chunk in embedded_chunks]
+    embeddings = [chunk["embedding"] for chunk in embedded_chunks]
+    metadatas = [
+        {
             "repo": chunk["repo"],
-
             "path": chunk["path"],
-
             "language": chunk["language"],
-
             "chunk_type": chunk["chunk_type"],
-
             "chunk_name": chunk["chunk_name"],
-
             "start_line": chunk["start_line"],
+            "end_line": chunk["end_line"],
+        }
+        for chunk in embedded_chunks
+    ]
 
-            "end_line": chunk["end_line"]
+    # collection.add() rejects a single call larger than the backend's max
+    # batch size (confirmed 5461 on this project's client) rather than
+    # chunking it itself -- a repo with enough chunks to cross that would
+    # otherwise fail indexing entirely, partway through this call.
+    batch_size = client.get_max_batch_size()
 
-        })
+    for start in range(0, len(ids), batch_size):
+        end = start + batch_size
+        collection.add(
+            ids=ids[start:end],
+            documents=documents[start:end],
+            embeddings=embeddings[start:end],
+            metadatas=metadatas[start:end],
+        )
 
-    collection.add(
-
-        ids=ids,
-
-        documents=documents,
-
-        embeddings=embeddings,
-
-        metadatas=metadatas
-
-    )
-    
     print(f"Adding {len(ids)} vectors...")
-    
+
     return collection.count()
 
 
