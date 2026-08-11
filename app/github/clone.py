@@ -159,3 +159,23 @@ def clone_repository(repo_url: str):
         )
 
     return clone_path
+
+
+def delete_repository_clone(repo_name: str) -> None:
+    """
+    Remove a previously cloned repository's directory from disk. Reuses
+    the same safety check and readonly-retry handling clone_repository
+    itself uses -- this deletes real files on a storage-constrained
+    deployment, so it must be exactly as careful about what path it's
+    allowed to touch as the clone path already is.
+
+    A repo that was never actually cloned (directory doesn't exist) is
+    not an error here -- nothing to remove.
+    """
+
+    clone_path = REPO_STORAGE / repo_name
+
+    _reject_unsafe_clone_path(repo_name, clone_path)
+
+    if clone_path.exists():
+        shutil.rmtree(clone_path, onerror=_clear_readonly_and_retry)

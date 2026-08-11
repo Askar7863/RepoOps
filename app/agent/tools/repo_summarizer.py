@@ -54,7 +54,7 @@ from ...rag.sparse_store import get_all_chunks
 from ...rag.retriever import retrieve_chunks
 from ...utils.logger import log_warning
 from ... import config
-from ..llm_client import get_client
+from ..llm_client import get_fast_client
 from ._shared import call_llm, no_repo, llm_error
 
 
@@ -66,8 +66,22 @@ TOOL_NAME = "repo_summarizer_tool"
 # tokens (tiktoken's cl100k_base, the standard GPT-3.5/4-family encoding),
 # not a naive character-count proxy -- a fixed 20,000-character cap was
 # the previous behavior and silently cut off real documentation on any
-# doc-heavy repo well before it needed to.
+# doc-heavy repo well before it needed to. Used for SUMMARY mode, which
+# genuinely needs the whole picture to produce an OVERVIEW/ARCHITECTURE/
+# SETUP/DOCUMENTATION-COVERAGE report.
 DOC_TOKEN_BUDGET = 100_000
+
+# QUESTION mode's own, much smaller budget -- measured directly as the
+# actual cause of a real, reported slowdown: a single narrow question
+# ("how does shell completion work") sent 77,812 input tokens because
+# EVERY markdown file in the repo was included in full regardless of
+# whether it was relevant, while the model's own answer only used 848
+# output tokens -- the input, not the output cap, was the real cost. A
+# specific question rarely needs every doc file in full; the RAG-
+# retrieved evidence below (which already includes doc_section chunks,
+# not just code) targets the specific thing being asked far more
+# precisely than a blanket document dump does.
+QUESTION_DOC_TOKEN_BUDGET = 15_000
 
 # How many RAG-retrieved code chunks to hand over as SECONDARY evidence,
 # for when the documentation doesn't clearly cover the request. Modest for
@@ -165,8 +179,8 @@ def _classify_query_mode(query: str) -> str:
     """
 
     try:
-        resp = get_client().chat.completions.create(
-            model=config.AZURE_CHAT_DEPLOYMENT,
+        resp = get_fast_client().chat.completions.create(
+            model=config.FAST_CHAT_MODEL,
             temperature=0,
             tools=_CLASSIFY_MODE_SCHEMA,
             tool_choice={"type": "function", "function": {"name": "classify_request"}},
@@ -317,8 +331,9 @@ def act_repo_summarizer(state: dict) -> dict:
     mode = _classify_query_mode(query)
     system_prompt = QUESTION_SYSTEM_PROMPT if mode == "QUESTION" else SUMMARY_SYSTEM_PROMPT
     top_k = QUESTION_CODE_FALLBACK_TOP_K if mode == "QUESTION" else CODE_FALLBACK_TOP_K
+    doc_budget = QUESTION_DOC_TOKEN_BUDGET if mode == "QUESTION" else DOC_TOKEN_BUDGET
 
-    docs, truncated = _gather_markdown_docs(local_path)
+    docs, truncated = _gather_markdown_docs(local_path, token_budget=doc_budget)
     overview = _repo_overview(state["active_repository"])
     code_chunks = retrieve_chunks(repository_name=state["active_repository"], query=query, top_k=top_k)
 
@@ -329,7 +344,7 @@ def act_repo_summarizer(state: dict) -> dict:
     if truncated:
         docs_block += (
             "\n\n(NOTE: this repository's documentation exceeded even a "
-            f"{DOC_TOKEN_BUDGET}-token budget -- some lower-priority .md "
+            f"{doc_budget}-token budget -- some lower-priority .md "
             "files past this point were not included. Mention this "
             "limitation if it seems relevant to the request.)"
         )

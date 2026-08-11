@@ -53,7 +53,7 @@ from ...github.git_history import (
     diff_stat_between, file_touches_with_author, normalize_identity, is_git_repo,
     latest_commit_detail,
 )
-from ..llm_client import get_client
+from ..llm_client import get_fast_client
 from ._shared import call_llm, no_repo, llm_error
 from .repo_health import compute_health
 
@@ -182,8 +182,8 @@ EXTRACT_SCOPE_SYSTEM_PROMPT = (
 
 def _extract_scope(query: str) -> dict:
     try:
-        resp = get_client().chat.completions.create(
-            model=config.AZURE_CHAT_DEPLOYMENT,
+        resp = get_fast_client().chat.completions.create(
+            model=config.FAST_CHAT_MODEL,
             temperature=0,
             tools=EXTRACT_SCOPE_SCHEMA,
             tool_choice={"type": "function", "function": {"name": "extract_scope"}},
@@ -390,8 +390,8 @@ def _classify_change_intent(commits: list) -> dict:
     numbered = "\n".join(f"{i}: {c['subject']}" for i, c in enumerate(subjects))
 
     try:
-        resp = get_client().chat.completions.create(
-            model=config.AZURE_CHAT_DEPLOYMENT,
+        resp = get_fast_client().chat.completions.create(
+            model=config.FAST_CHAT_MODEL,
             temperature=0,
             tools=CLASSIFY_COMMITS_SCHEMA,
             tool_choice={"type": "function", "function": {"name": "classify_commits"}},

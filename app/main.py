@@ -58,7 +58,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .active_repo import get_active_repository, set_active_repository
-from .github.clone import clone_repository, REPO_STORAGE
+from .github.clone import clone_repository, delete_repository_clone, REPO_STORAGE
+from .github.repo_limits import check_repo_limits
 from .github.scanner import scan_repository
 from .github.filter import filter_repository_files
 from .github.chunker import chunk_repository
@@ -226,6 +227,19 @@ def load_repository(req: RepositoryRequest):
     try:
 
         ###################################################
+        # STEP 0 - CHECK REPOSITORY LIMITS
+        ###################################################
+        # Runs BEFORE anything is cloned, on purpose -- a repo that's
+        # going to be rejected anyway should be rejected instantly, not
+        # after spending clone bandwidth/disk/time on it first. See
+        # app/github/repo_limits.py for the size/file-count thresholds
+        # and the reasoning behind them.
+
+        log_step("STEP 0 - CHECK REPOSITORY LIMITS")
+
+        check_repo_limits(repo_url)
+
+        ###################################################
         # STEP 1 - CLONE REPOSITORY
         ###################################################
 
@@ -303,7 +317,7 @@ def load_repository(req: RepositoryRequest):
         memory.reset()
 
         ###################################################
-        # STEP 6 - DROP THE PREVIOUS REPOSITORY'S INDEX
+        # STEP 6 - DROP THE PREVIOUS REPOSITORY'S INDEX AND CLONE
         ###################################################
         # Only one repository's data should ever be queryable at a time --
         # the agent must not be able to answer from a previously loaded
@@ -314,15 +328,23 @@ def load_repository(req: RepositoryRequest):
         # server processes disagreeing on the active repo). Deleting it
         # here removes that risk at the source instead of only guarding
         # against it at query time.
+        #
+        # The previous repository's CLONE on disk is dropped here too, not
+        # just its index -- confirmed as a real storage leak otherwise: on
+        # a storage-constrained deployment (e.g. a small EC2 instance),
+        # every repo a user ever loads would stay on disk forever, since
+        # nothing else ever cleaned up repos/<name> once a different repo
+        # became active.
 
         if previous_repository and previous_repository != local_path.name:
 
-            log_step("STEP 6 - DROP PREVIOUS REPOSITORY INDEX")
+            log_step("STEP 6 - DROP PREVIOUS REPOSITORY INDEX AND CLONE")
 
             delete_collection(previous_repository)
             delete_sparse_index(previous_repository)
+            delete_repository_clone(previous_repository)
 
-            log_success(f"Removed index for previous repository: {previous_repository}")
+            log_success(f"Removed index and clone for previous repository: {previous_repository}")
 
     except Exception as exc:
 
