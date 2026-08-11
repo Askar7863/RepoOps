@@ -82,6 +82,37 @@ PERSONA_LENSES = {
 }
 
 
+# Applied to EVERY call_llm call, unconditionally, before any persona lens --
+# every tool that produces free-form prose (general_chat, repo_summarizer's
+# answer, repo_health's/repo_evolution's narration) goes through call_llm, so
+# adding it here once covers all of them instead of duplicating it per tool.
+#
+# Confirmed as a real, reproduced gap: a message like "what is CSS and how "
+# "to make biryani" got a full, friendly, complete recipe answered alongside
+# the CSS explanation -- general_chat.py's own system prompt ("You are
+# RepoOps, an assistant for...") is descriptive, not a refusal instruction,
+# so nothing told the model not to just answer whatever was asked. An
+# earlier attempt at fixing this used a SEPARATE pre-routing classifier
+# (scope_guard.py) -- removed after it started rejecting genuinely in-scope
+# questions too eagerly, since it was a second, independent judgment call
+# with no view of how the real answering model would actually handle the
+# request. This version has no separate judgment call to get wrong: it's
+# one instruction inside the SAME call that already answers the question,
+# with the full real context, so it can only narrow what one specific
+# generation says -- never independently block a request before generation
+# even gets a chance to see it.
+_SCOPE_GUARDRAIL = (
+    "SCOPE: you only help with the loaded repository, software engineering, code, and "
+    "Git/GitHub -- nothing else. If any part of the request has no real connection to that "
+    "(general knowledge, recipes, trivia, personal/medical/legal advice, or any other "
+    "unrelated topic), do NOT answer that part at all -- not briefly, not partially, not as "
+    "a courtesy. Say plainly that it's outside what you can help with here. If the request "
+    "mixes an in-scope question with an unrelated one, answer ONLY the in-scope part in full "
+    "and explicitly decline the rest in one short sentence -- never write out the unrelated "
+    "answer even to be helpful."
+)
+
+
 def persona_lens(persona: Optional[str]) -> str:
     """
     The narration-framing paragraph for one persona, or "" for no persona
@@ -112,12 +143,14 @@ def call_llm(
     computed numbers" system prompts stay untouched by this feature."""
 
     lens = persona_lens(persona)
-    full_system = f"{system}\n\n{lens}" if lens else system
+    full_system = f"{system}\n\n{_SCOPE_GUARDRAIL}"
+    if lens:
+        full_system += f"\n\n{lens}"
     full_user_content = f"{conversation_context}\n\n{user_content}" if conversation_context else user_content
 
     try:
         resp = get_client().chat.completions.create(
-            model=config.AZURE_CHAT_DEPLOYMENT,
+            model=config.CHAT_MODEL,
             temperature=temperature,
             messages=[
                 {"role": "system", "content": full_system},

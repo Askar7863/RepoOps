@@ -16,6 +16,37 @@ AZURE_CHAT_DEPLOYMENT = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4o-mini")
 AZURE_EMBED_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMBED_DEPLOYMENT", "text-embedding-3-small")
 
 # ---------------------------------------------------------------------------
+# LLM provider toggle
+# ---------------------------------------------------------------------------
+# The ONE place to switch which chat-completion provider every tool/router/
+# verifier call in the app uses -- set LLM_PROVIDER=anthropic in .env (or
+# leave unset/"azure" for the original behavior). See app/agent/llm_client.py
+# for how this is actually applied: every existing call site keeps calling
+# `get_client().chat.completions.create(...)` completely unchanged, and
+# `model=CHAT_MODEL` below resolves to the right model string either way, so
+# switching providers never means touching any of the ~10 call sites across
+# router.py/verifier.py/the tools -- only this config value (or the env var
+# behind it) needs to change.
+#
+# Embeddings (app/rag/embeddings.py) are a separate, always-local model and
+# are NOT affected by this toggle -- only chat/completion calls switch.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "azure").strip().lower()  # "azure" | "anthropic"
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL")
+ANTHROPIC_CHAT_MODEL = os.getenv("ANTHROPIC_CHAT_MODEL", "claude-sonnet-4-6")
+
+CHAT_MODEL = ANTHROPIC_CHAT_MODEL if LLM_PROVIDER == "anthropic" else AZURE_CHAT_DEPLOYMENT
+
+# The always-fast tier for internal routing/classification calls (see
+# llm_client.get_fast_client) -- deliberately NOT affected by LLM_PROVIDER.
+# These are narrow, forced-schema decisions ("which tool", "in scope or
+# not") where a bigger/slower model adds latency, not quality -- measured
+# directly: a single query chains several of these before ever reaching
+# the one call whose output the user actually reads.
+FAST_CHAT_MODEL = AZURE_CHAT_DEPLOYMENT
+
+# ---------------------------------------------------------------------------
 # RAG pipeline tunables (app/github/chunker.py, app/rag/*)
 # ---------------------------------------------------------------------------
 

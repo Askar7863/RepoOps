@@ -113,7 +113,7 @@ from ...github.language import detect_category, tree_sitter_language_name, NOT_C
 from ...rag.retriever import retrieve_chunks
 from ...rag.indexer import reindex_file
 from ...rag.sparse_store import get_all_chunks
-from ..llm_client import get_client
+from ..llm_client import get_client, get_fast_client
 from ._shared import no_repo, llm_error, resolve_target, full_symbol_source, file_outline, OUTLINE_HANDLERS, persona_lens
 
 
@@ -493,8 +493,8 @@ def _plan_file_targets(query: str, reference_context: str, repo_files: List[str]
     )
 
     try:
-        resp = get_client().chat.completions.create(
-            model=config.AZURE_CHAT_DEPLOYMENT,
+        resp = get_fast_client().chat.completions.create(
+            model=config.FAST_CHAT_MODEL,
             temperature=0,
             tools=PLAN_SCHEMA,
             tool_choice={"type": "function", "function": {"name": "plan_file_changes"}},
@@ -642,8 +642,8 @@ def _expand_plan_with_dependencies(
     )
 
     try:
-        resp = get_client().chat.completions.create(
-            model=config.AZURE_CHAT_DEPLOYMENT,
+        resp = get_fast_client().chat.completions.create(
+            model=config.FAST_CHAT_MODEL,
             temperature=0,
             tools=EXPAND_PLAN_SCHEMA,
             tool_choice={"type": "function", "function": {"name": "expand_plan"}},
@@ -858,12 +858,118 @@ def _restore(target: Path, snapshot: Optional[str]) -> None:
 _FIXED_BLOCK_NAME_RE = re.compile(r"^block_\d+$")
 
 
+# ---------------------------------------------------------------------------
+# Deletion-only guard -- ONE decision for the whole request, made before
+# retrieval/planning/generation ever runs, instead of relying on every
+# per-target generation call to independently re-derive "this whole request
+# is a deletion, I should decline" for every planned target.
+#
+# Confirmed as a real, necessary fix, not a precaution: a request like
+# "delete all files in this repository" got planned against several targets
+# (the repo's real file list, plus files created earlier in the same
+# session), and MOST of those targets correctly declined via
+# WRITE_CODE_SYSTEM_PROMPT's own delete-decline instruction -- but one did
+# not. That one target's generation call, made independently at
+# temperature=0.2, chose to interpret the request more charitably and
+# produced a real, completely unrelated edit (replacing an unrelated
+# function) instead of declining -- not because the instruction was wrong,
+# but because the SAME judgment call was being asked N separate times
+# instead of once, and only needed to slip once to produce an unwanted
+# write. Deciding this once, for the request as a whole, before any target
+# is ever planned, removes that N-independent-chances failure mode
+# entirely -- there's nothing left to generate against if this fires.
+# ---------------------------------------------------------------------------
+
+DELETION_ONLY_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "classify_deletion_only",
+            "description": (
+                "Determine whether a code-change request is PURELY about deleting or "
+                "removing something, with nothing else to create, append, or replace."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "is_deletion_only": {
+                        "type": "boolean",
+                        "description": (
+                            "True if the request's ENTIRE ask is to delete/remove something -- "
+                            "one file, several files, a whole directory, every file in the "
+                            "repository, or a whole function/class/symbol outright -- with no "
+                            "other create/append/replace request bundled in. False if it asks "
+                            "to create, add, modify, fix, or replace anything, even alongside a "
+                            "deletion, since that part IS something this tool can attempt."
+                        ),
+                    },
+                },
+                "required": ["is_deletion_only"],
+            },
+        },
+    },
+]
+
+DELETION_ONLY_SYSTEM_PROMPT = (
+    "Classify whether a code-change request is PURELY about deleting or removing something -- "
+    "one file, several files, an entire directory, every file in the repository, or a whole "
+    "function/class/symbol outright -- with nothing else in the same request asking to create, "
+    "add, append, fix, or replace content. There is no delete operation available at all, for "
+    "any target, at any scope -- a request phrased broadly ('delete everything', 'wipe this "
+    "repo', 'clear out the tests directory') is exactly as impossible as one naming a single "
+    "file or symbol, and must be classified the same way, not treated as somehow different "
+    "just because it's broader. If the request asks for a real, non-deletion change alongside a "
+    "deletion (e.g. 'delete the old auth code and add a new one'), this is False -- the "
+    "non-deletion part is something to actually attempt."
+)
+
+
+def _classify_deletion_only(query: str) -> bool:
+    """
+    Defaults to False (not deletion-only) on any classification failure --
+    this check can only make the tool decline EARLIER and more reliably;
+    it must never be the reason a legitimate request never gets attempted.
+    """
+
+    try:
+        resp = get_fast_client().chat.completions.create(
+            model=config.FAST_CHAT_MODEL,
+            temperature=0,
+            tools=DELETION_ONLY_SCHEMA,
+            tool_choice={"type": "function", "function": {"name": "classify_deletion_only"}},
+            messages=[
+                {"role": "system", "content": DELETION_ONLY_SYSTEM_PROMPT},
+                {"role": "user", "content": query},
+            ],
+        )
+        args = json.loads(resp.choices[0].message.tool_calls[0].function.arguments)
+        return bool(args.get("is_deletion_only"))
+    except Exception as exc:
+        log_warning(f"{TOOL_NAME}: deletion-only classification failed ({exc}); continuing normally")
+        return False
+
+
 def act_code_writer(state: dict) -> dict:
     if state.get("local_path") is None:
         return no_repo(state, TOOL_NAME)
 
     local_path: Path = state["local_path"]
     query = state["tool_args"].get("query", state["message"])
+
+    if _classify_deletion_only(query):
+        state["reply"] = (
+            "Deleting files, directories, or symbols isn't something I can do -- I can only "
+            "create a file, append to one, or replace part of one. There's no delete operation "
+            "available, at any scope, whether that's one file or the whole repository. If you "
+            "want something removed, delete it yourself using your file system or version "
+            "control (e.g. `git rm`); if you meant a real change instead (like clearing a "
+            "file's content, or replacing something with something else), tell me that and I "
+            "will."
+        )
+        state["sources"] = []
+        state["tool_used"] = TOOL_NAME
+        state["error"] = "deletion_not_supported"
+        return state
 
     reference_chunks = retrieve_chunks(
         repository_name=state["active_repository"],
@@ -1115,7 +1221,7 @@ def act_code_writer(state: dict) -> dict:
 
         try:
             resp = get_client().chat.completions.create(
-                model=config.AZURE_CHAT_DEPLOYMENT,
+                model=config.CHAT_MODEL,
                 temperature=0.2,
                 tools=WRITE_CODE_SCHEMA,
                 tool_choice={"type": "function", "function": {"name": "write_code"}},

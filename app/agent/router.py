@@ -18,7 +18,7 @@ import json
 
 from .. import config
 from ..utils.logger import log_step, log_info
-from .llm_client import get_client
+from .llm_client import get_fast_client
 from . import tools
 
 
@@ -190,8 +190,8 @@ def classify_intent(state: dict) -> dict:
     )
 
     try:
-        resp = get_client().chat.completions.create(
-            model=config.AZURE_CHAT_DEPLOYMENT,
+        resp = get_fast_client().chat.completions.create(
+            model=config.FAST_CHAT_MODEL,
             temperature=0,
             tools=TOOL_SCHEMAS,
             tool_choice="auto",
